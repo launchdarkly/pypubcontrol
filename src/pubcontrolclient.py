@@ -55,6 +55,7 @@ class PubControlClient(object):
 		self.auth_basic_pass = None
 		self.auth_jwt_claim = None
 		self.auth_jwt_key = None
+		self.timeout_sec = 1.0
 		self.requests_session = requests.session()
 		self._sub_monitor = None
 
@@ -87,15 +88,17 @@ class PubControlClient(object):
 			self.lock.acquire()
 			uri = self.uri
 			auth = self._gen_auth_header()
+			timeout = self.timeout_sec
 			self.lock.release()
-			self._pubcall(uri, auth, [i])
+			self._pubcall(uri, auth, [i], timeout)
 		else:
 			self.lock.acquire()
 			uri = self.uri
 			auth = self._gen_auth_header()
+			timeout = self.timeout_sec
 			self._ensure_thread()
 			self.lock.release()
-			self._queue_req(('pub', uri, auth, i, callback))
+			self._queue_req(('pub', uri, auth, i, timeout, callback))
 
 	# This method is a blocking method that ensures that all asynchronous
 	# publishing is complete prior to returning and allowing the consumer to 
@@ -160,7 +163,7 @@ class PubControlClient(object):
 	# An internal method for preparing the HTTP POST request for publishing
 	# data to the endpoint. This method accepts the URI endpoint, authorization
 	# header, and a list of items to publish.
-	def _pubcall(self, uri, auth_header, items):
+	def _pubcall(self, uri, auth_header, items, timeout):
 		uri = uri + '/publish/'
 
 		headers = dict()
@@ -180,17 +183,17 @@ class PubControlClient(object):
 				content_raw = content_raw.encode('utf-8')
 			
 		try:
-			self._make_http_request(uri, content_raw, headers)
+			self._make_http_request(uri, content_raw, headers, timeout)
 		except Exception as e:
 			raise ValueError('failed to publish: ' + str(e))
 
 	# An internal method for making an HTTP request to the specified URI
 	# with the specified content and headers.
-	def _make_http_request(self, uri, content_raw, headers):
+	def _make_http_request(self, uri, content_raw, headers, timeout):
 		if sys.version_info >= (2, 7, 9) or (ndg and ndg.httpsclient):
-			res = self.requests_session.post(uri, headers=headers, data=content_raw)
+			res = self.requests_session.post(uri, headers=headers, data=content_raw, timeout=timeout)
 		else:
-			res = self.requests_session.post(uri, headers=headers, data=content_raw, verify=False)
+			res = self.requests_session.post(uri, headers=headers, data=content_raw, timeout=timeout, verify=False)
 		self._verify_status_code(res.status_code, res.text)
 
 	# An internal method for ensuring a successful status code is returned
@@ -207,17 +210,19 @@ class PubControlClient(object):
 	# provided for that request) and passed a result indicating whether that
 	# request was successfully published.
 	def _pubbatch(self, reqs):
+		# reqs: [(uri, auth, i, timeout, callback)]
 		assert(len(reqs) > 0)
 		uri = reqs[0][0]
 		auth_header = reqs[0][1]
+		timeout = reqs[0][3]
 		items = list()
 		callbacks = list()
 		for req in reqs:
 			items.append(req[2])
-			callbacks.append(req[3])
+			callbacks.append(req[4])
 
 		try:
-			self._pubcall(uri, auth_header, items)
+			self._pubcall(uri, auth_header, items, timeout)
 			result = (True, '')
 		except Exception as e:
 			try:
@@ -254,7 +259,7 @@ class PubControlClient(object):
 				if m[0] == 'stop':
 					quit = True
 					break
-				reqs.append((m[1], m[2], m[3], m[4]))
+				reqs.append((m[1], m[2], m[3], m[4], m[5]))
 
 			self.thread_cond.release()
 

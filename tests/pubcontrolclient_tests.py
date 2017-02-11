@@ -29,8 +29,9 @@ class PubControlClientForTesting(PubControlClient):
 		self.test_instance = instance
 
 class PccForPublishTesting(PubControlClientForTesting):
-	def _pubcall(self, uri, auth_header, items):
+	def _pubcall(self, uri, auth_header, items, timeout):
 		self.test_instance.assertEqual(uri, 'uri')
+		self.test_instance.assertEqual(timeout, self.timeout_sec)
 		self.test_instance.assertEqual(auth_header, 'Basic ' + str(b64encode(
 				'user:pass'.encode('ascii'))))
 		self.test_instance.assertEqual(items, [{'name': {'body': 'bodyvalue'},
@@ -43,7 +44,8 @@ class PccForPublishTesting(PubControlClientForTesting):
 				'user:pass'.encode('ascii'))))
 		self.test_instance.assertEqual(req[3], {'name': {'body': 'bodyvalue'},
 				'channel': 'chann'})
-		self.test_instance.assertEqual(req[4], 'callback')
+		self.test_instance.assertEqual(req[4], self.timeout_sec)
+		self.test_instance.assertEqual(req[5], 'callback')
 
 	def _ensure_thread(self):
 		self.ensure_thread_executed = True
@@ -55,10 +57,11 @@ class PccForPubCallTesting(PubControlClientForTesting):
 		self.http_headers = headers
 		self.http_result_failure = result_failure
 
-	def _make_http_request(self, uri, content_raw, headers):
+	def _make_http_request(self, uri, content_raw, headers, timeout):
 		self.test_instance.assertEqual(uri, self.http_uri + '/publish/')
 		self.test_instance.assertEqual(content_raw.decode('utf-8'), json.dumps(self.http_content_raw))
 		self.test_instance.assertEqual(headers, self.http_headers)
+		self.test_instance.assertEqual(timeout, self.timeout_sec)
 		if self.http_result_failure:
 			raise ValueError('test failure')
 
@@ -68,10 +71,11 @@ class PccForPubBatchTesting(PubControlClientForTesting):
 		self.num_callbacks = num_callbacks
 		self.http_result_failure = result_failure
 
-	def _pubcall(self, uri, auth_header, items):
+	def _pubcall(self, uri, auth_header, items, timeout):
 		self.test_instance.assertEqual(uri, 'uri')
 		self.test_instance.assertEqual(auth_header, 'Basic ' + str(b64encode(
 				('user:pass' + str(self.req_index)).encode('ascii'))))
+		self.test_instance.assertEqual(timeout, self.timeout_sec)
 		items_to_compare_with = []
 		export = Item(TestFormatSubClass()).export()
 		export['channel'] = 'chann'
@@ -96,7 +100,8 @@ class PccForPubWorkerTesting(PubControlClientForTesting):
 			export = Item(TestFormatSubClass()).export()
 			export['channel'] = 'chann'
 			self.test_instance.assertEqual(req[2], export)
-			self.test_instance.assertEqual(req[3], 'callback')
+			self.test_instance.assertEqual(req[3], self.timeout_sec)
+			self.test_instance.assertEqual(req[4], 'callback')
 			self.req_index += 1
 
 class TestPubControlClient(unittest.TestCase):
@@ -112,6 +117,7 @@ class TestPubControlClient(unittest.TestCase):
 		self.assertEqual(pcc.auth_jwt_key, None)
 		self.assertEqual(pcc._sub_monitor, None)
 		self.assertTrue(pcc.lock != None)
+		self.assertEqual(pcc.timeout_sec, 1)
 
 	def test_set_auth_basic(self):
 		pcc = PubControlClient('uri')
@@ -221,7 +227,7 @@ class TestPubControlClient(unittest.TestCase):
 		pcc.set_test_instance(self)
 		pcc._pubcall('http://localhost:8080', 'Basic ' + str(
 				b64encode('user:pass'.encode('ascii'))), [{'name': {'body': 'bodyvalue'},
-				'channel': 'chann'}])
+				'channel': 'chann'}], pcc.timeout_sec)
 
 	def test_pubcall_success_https(self):
 		pcc = PccForPubCallTesting('uri')
@@ -238,7 +244,7 @@ class TestPubControlClient(unittest.TestCase):
 				'zI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJoZWxsbyIsImV4cCI6MTQyNjEwN' +
 				'jYwMX0.qmFVZ3iS041fAhqHno0vYLykNycT40ntBuD3G7ISDJw',
 				[{'name': {'body': 'bodyvalue'},
-				'channel': 'chann'}])
+				'channel': 'chann'}], pcc.timeout_sec)
 
 	def test_pubcall_failure(self):
 		pcc = PccForPubCallTesting('uri')
@@ -248,7 +254,7 @@ class TestPubControlClient(unittest.TestCase):
 		pcc.set_test_instance(self)
 		try:
 			pcc._pubcall('https://localhost:8080', None, [{'name':
-					{'body': 'bodyvalue'}, 'channel': 'chann'}])
+					{'body': 'bodyvalue'}, 'channel': 'chann'}], pcc.timeout_sec)
 			self.assertTrue(False)
 		except ValueError as e:
 			self.assertTrue(str(e).index('test failure'))
@@ -271,7 +277,7 @@ class TestPubControlClient(unittest.TestCase):
 		for n in range(0, self.num_cbs_expected):
 			reqs.append(['uri', 'Basic ' + str(b64encode(
 					('user:pass' + str(n)).encode('ascii'))),
-					export, self.pubbatch_callback])
+					export, pcc.timeout_sec, self.pubbatch_callback])
 		pcc._pubbatch(reqs)
 		self.assertEqual(self.num_cbs_expected, 0)
 
@@ -288,7 +294,7 @@ class TestPubControlClient(unittest.TestCase):
 		for n in range(0, self.num_cbs_expected):
 			reqs.append(['uri', 'Basic ' + str(b64encode(('user:pass' +
 					str(n)).encode('ascii'))),
-					export, self.pubbatch_callback])
+					export, pcc.timeout_sec, self.pubbatch_callback])
 		pcc._pubbatch(reqs)
 		self.assertEqual(self.num_cbs_expected, 0)
 
@@ -302,7 +308,7 @@ class TestPubControlClient(unittest.TestCase):
 		for n in range(0, 500):
 			pcc.req_queue.append(('pub', 'uri',
 					'Basic ' + str(b64encode(('user:pass' + str(n)).encode('ascii'))),
-					export, 'callback'))
+					export, pcc.timeout_sec, 'callback'))
 		pcc.finish()
 		self.assertEqual(pcc.req_index, 500)
 
@@ -319,7 +325,7 @@ class TestPubControlClient(unittest.TestCase):
 			else:
 				pcc.req_queue.append(['pub', 'uri',
 						'Basic ' + str(b64encode(('user:pass' +
-						str(n)).encode('ascii'))), export, 'callback'])
+						str(n)).encode('ascii'))), export, pcc.timeout_sec, 'callback'])
 		pcc.finish()
 		self.assertEqual(pcc.req_index, 250)
 
